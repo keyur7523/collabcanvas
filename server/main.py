@@ -17,12 +17,10 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler for startup/shutdown."""
-    # Startup - use websocket_server as async context manager
     logger.info("Starting CollabCanvas API...")
     async with websocket_server:
         logger.info("Yjs WebSocket server started")
         yield
-    # Shutdown happens automatically when exiting the context
     logger.info("CollabCanvas API shut down")
 
 

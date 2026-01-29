@@ -151,8 +151,11 @@ async def accept_invite(
     )
     existing = result.scalar_one_or_none()
 
+    # Capture board_id before any potential rollback (to avoid lazy loading issues)
+    board_id_str = str(invite.board_id)
+
     if existing:
-        return {"message": "You are already a member of this board", "board_id": str(invite.board_id)}
+        return {"message": "You are already a member of this board", "board_id": board_id_str}
 
     # Add as member
     member = BoardMember(
@@ -170,9 +173,9 @@ async def accept_invite(
     except IntegrityError:
         # Race condition - user was added between check and insert
         await db.rollback()
-        return {"message": "You are already a member of this board", "board_id": str(invite.board_id)}
+        return {"message": "You are already a member of this board", "board_id": board_id_str}
 
-    return {"message": "Successfully joined the board", "board_id": str(invite.board_id)}
+    return {"message": "Successfully joined the board", "board_id": board_id_str}
 
 
 # Member management endpoints

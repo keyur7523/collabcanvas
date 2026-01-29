@@ -12,7 +12,7 @@ import { WebsocketProvider } from 'y-websocket';
 import type { Shape } from '@/types/shapes';
 import { useAuthStore } from '@/stores/authStore';
 
-const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:1234';
+const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:8000/ws';
 
 interface CanvasContextType {
   ydoc: Y.Doc;
