@@ -2,7 +2,8 @@ import * as Y from 'yjs';
 import { WebsocketProvider } from 'y-websocket';
 import type { Shape } from '@/types/shapes';
 
-const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:1234';
+// CRITICAL FIX: Use port 8000 (backend) with /ws path prefix
+const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:8000/ws';
 
 export interface CollabSession {
   ydoc: Y.Doc;
@@ -13,10 +14,13 @@ export interface CollabSession {
   destroy: () => void;
 }
 
-export function createCollabSession(boardId: string): CollabSession {
+export function createCollabSession(boardId: string, token?: string): CollabSession {
   const ydoc = new Y.Doc();
 
-  const provider = new WebsocketProvider(WS_URL, boardId, ydoc);
+  // Pass JWT token via params for authentication
+  const provider = new WebsocketProvider(WS_URL, boardId, ydoc, {
+    params: token ? { token } : {},
+  });
 
   const yShapes = ydoc.getMap<Shape>('shapes');
   const yLayers = ydoc.getArray<string>('layers');
