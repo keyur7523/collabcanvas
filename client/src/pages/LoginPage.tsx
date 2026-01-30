@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Navigate } from 'react-router-dom';
+import { useState, useEffect } from 'react';
+import { Navigate, useLocation } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { useAuthStore } from '@/stores/authStore';
 import { getGoogleAuthUrl, getGithubAuthUrl } from '@/api/auth';
@@ -7,7 +7,18 @@ import { Button } from '@/components/ui/Button';
 
 export function LoginPage() {
   const { isAuthenticated } = useAuthStore();
+  const location = useLocation();
   const [isLoading, setIsLoading] = useState<'google' | 'github' | null>(null);
+
+  // Save the intended destination from ProtectedRoute to sessionStorage
+  // This persists through the OAuth redirect flow
+  useEffect(() => {
+    const from = (location.state as { from?: Location })?.from;
+    if (from?.pathname && from.pathname !== '/login') {
+      const redirectUrl = from.pathname + (from.search || '');
+      sessionStorage.setItem('redirectAfterLogin', redirectUrl);
+    }
+  }, [location.state]);
 
   // If already authenticated, redirect to home
   if (isAuthenticated) {

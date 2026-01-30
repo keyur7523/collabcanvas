@@ -33,14 +33,25 @@ export function AuthCallbackPage() {
         const user = await getCurrentUser();
         setUser(user);
 
-        // Check for pending invite
+        // Check for pending invite first (highest priority)
         const pendingInvite = sessionStorage.getItem('pending-invite');
         if (pendingInvite) {
           sessionStorage.removeItem('pending-invite');
+          sessionStorage.removeItem('redirectAfterLogin');
           navigate(`/invite/${pendingInvite}`, { replace: true });
-        } else {
-          navigate('/', { replace: true });
+          return;
         }
+
+        // Check for redirect URL (from ProtectedRoute)
+        const redirectUrl = sessionStorage.getItem('redirectAfterLogin');
+        if (redirectUrl) {
+          sessionStorage.removeItem('redirectAfterLogin');
+          navigate(redirectUrl, { replace: true });
+          return;
+        }
+
+        // Default to dashboard
+        navigate('/', { replace: true });
       } catch (err) {
         console.error('Failed to fetch user:', err);
         logout();
