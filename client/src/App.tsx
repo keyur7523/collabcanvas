@@ -39,6 +39,14 @@ function App() {
           }
         />
         <Route
+          path="/dashboard"
+          element={
+            <ProtectedRoute>
+              <HomePage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
           path="/board/:boardId"
           element={
             <ProtectedRoute>

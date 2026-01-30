@@ -1,6 +1,7 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
+import Konva from 'konva';
 import {
   Settings,
   Share2,
@@ -22,9 +23,12 @@ import { LayersPanel } from '@/components/panels/LayersPanel';
 import { CommentsPanel } from '@/components/panels/CommentsPanel';
 import { PresencePanel } from '@/components/collaboration/PresencePanel';
 import { ShareModal } from '@/components/sharing/ShareModal';
+import { ExportMenu } from '@/components/export';
 import { OnlineUsers } from '@/components/ui/OnlineUsers';
 import { useAuthStore } from '@/stores/authStore';
-import { getBoard, type Board } from '@/api/boards';
+import { useYjsShapes } from '@/hooks/useYjsShapes';
+import { getBoard, updateBoard, type Board } from '@/api/boards';
+import { EditableBoardName } from '@/components/board/EditableBoardName';
 import { cn } from '@/lib/utils';
 import type { UserInfo, RemoteState } from '@/hooks/useAwareness';
 
@@ -127,7 +131,27 @@ function BoardContent({ board, user }: BoardContentProps) {
   const [activeTab, setActiveTab] = useState<PanelTab>('properties');
   const [isShareOpen, setIsShareOpen] = useState(false);
   const [isPanelCollapsed, setIsPanelCollapsed] = useState(false);
-  
+  const [boardName, setBoardName] = useState(board.name);
+
+  // Stage ref for export
+  const canvasStageRef = useRef<Konva.Stage>(null);
+
+  // Get shapes for SVG export
+  const { shapes } = useYjsShapes();
+
+  // Handle board name update
+  const handleBoardNameSave = useCallback(async (newName: string) => {
+    try {
+      await updateBoard(board.id, { name: newName });
+      setBoardName(newName);
+      toast.success('Board renamed');
+    } catch (error) {
+      console.error('Failed to rename board:', error);
+      toast.error('Failed to rename board');
+      throw error;
+    }
+  }, [board.id]);
+
   // Presence state
   const [remoteStates, setRemoteStates] = useState<Map<number, RemoteState>>(new Map());
   const [followingUserId, setFollowingUserId] = useState<string | null>(null);
@@ -184,8 +208,11 @@ function BoardContent({ board, user }: BoardContentProps) {
             CollabCanvas
           </button>
           <span className="text-text-muted">/</span>
-          <span className="text-text font-medium truncate max-w-xs">{board.name}</span>
-          
+          <EditableBoardName
+            name={boardName}
+            onSave={handleBoardNameSave}
+          />
+
           {/* Connection status */}
           <div className="flex items-center gap-1.5 text-xs text-text-secondary">
             {getStatusIcon()}
@@ -195,7 +222,13 @@ function BoardContent({ board, user }: BoardContentProps) {
 
         <div className="flex items-center gap-3">
           <OnlineUsers />
-          
+
+          <ExportMenu
+            stageRef={canvasStageRef}
+            shapes={shapes}
+            boardName={boardName}
+          />
+
           <Button
             variant="secondary"
             size="sm"
@@ -218,9 +251,10 @@ function BoardContent({ board, user }: BoardContentProps) {
       <div className="flex-1 flex overflow-hidden relative">
         {/* Canvas area */}
         <main className="flex-1 relative">
-          <CollabCanvas 
-            user={user} 
+          <CollabCanvas
+            user={user}
             onRemoteStatesChange={handleRemoteStatesChange}
+            stageRef={canvasStageRef}
           />
           <Toolbar />
           

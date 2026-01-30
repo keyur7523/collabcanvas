@@ -6,11 +6,18 @@ import { useCanvasContext } from './CanvasProvider';
 import { useYjsShapes } from '@/hooks/useYjsShapes';
 import { useYjsUndoRedo } from '@/hooks/useYjsUndoRedo';
 import { useAwareness, type UserInfo } from '@/hooks/useAwareness';
+import { useClipboard } from '@/hooks/useClipboard';
+import { useAlignment } from '@/hooks/useAlignment';
 import { useToolStore } from '@/stores/toolStore';
+import { useSnapStore, snapToGrid } from '@/stores/snapStore';
 import { useThrottle } from '@/hooks/useThrottle';
 import { ShapeRenderer } from './shapes/ShapeRenderer';
 import { CursorLayer } from './CursorLayer';
 import { RemoteSelections } from './RemoteSelections';
+import { Grid } from './Grid';
+import { ContextMenu } from './ContextMenu';
+import { ZoomControls } from './ZoomControls';
+import { AlignmentToolbar } from './AlignmentToolbar';
 import type {
   Shape,
   RectangleShape,
@@ -28,14 +35,21 @@ import { generateId } from '@/lib/utils';
 // Viewport buffer for virtualization (render shapes this far outside viewport)
 const VIEWPORT_BUFFER = 200;
 
+// Zoom constants
+const MIN_SCALE = 0.1;
+const MAX_SCALE = 5;
+const ZOOM_STEP = 0.25;
+
 interface Props {
   user: UserInfo;
   onRemoteStatesChange?: (states: Map<number, any>) => void;
+  stageRef?: React.RefObject<Konva.Stage | null>;
 }
 
-export function CollabCanvas({ user, onRemoteStatesChange }: Props) {
+export function CollabCanvas({ user, onRemoteStatesChange, stageRef }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const stageRef = useRef<Konva.Stage>(null);
+  const internalStageRef = useRef<Konva.Stage>(null);
+  const actualStageRef = stageRef || internalStageRef;
   const transformerRef = useRef<Konva.Transformer>(null);
 
   const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
@@ -46,18 +60,166 @@ export function CollabCanvas({ user, onRemoteStatesChange }: Props) {
   const [currentPoints, setCurrentPoints] = useState<number[]>([]);
   const [previewShape, setPreviewShape] = useState<Partial<Shape> | null>(null);
 
+  // Context menu state
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
+
   // Selection from context (shared with panels)
   const { selectedIds, setSelectedIds } = useCanvasContext();
 
   // Yjs hooks
-  const { shapes, layerOrder, addShape, updateShape, deleteShapes } = useYjsShapes();
+  const { shapes, layerOrder, addShape, updateShape, deleteShapes, reorderLayers } = useYjsShapes();
   const { undo, redo } = useYjsUndoRedo();
   const { remoteStates, updateCursor, clearCursor, updateSelection } = useAwareness(user);
 
   const { activeTool, fillColor, strokeColor, strokeWidth, setTool } = useToolStore();
+  const { snapEnabled, gridSize, toggleSnap } = useSnapStore();
 
   // Throttled cursor update for performance (50ms)
   const throttledUpdateCursor = useThrottle(updateCursor, 50);
+
+  // Clipboard functionality
+  const { copy, cut, paste, duplicate, hasClipboardContent, hasSelection } = useClipboard({
+    shapes,
+    selectedIds,
+    addShape,
+    deleteShapes,
+    setSelectedIds,
+  });
+
+  // Alignment functionality
+  const {
+    alignLeft,
+    alignCenterH,
+    alignRight,
+    alignTop,
+    alignCenterV,
+    alignBottom,
+    distributeH,
+    distributeV,
+    canAlign,
+    canDistribute,
+  } = useAlignment({
+    shapes,
+    selectedIds,
+    updateShape,
+  });
+
+  // Layer ordering helpers
+  const bringToFront = useCallback(() => {
+    if (selectedIds.length !== 1) return;
+    const id = selectedIds[0];
+    const newOrder = layerOrder.filter((lid) => lid !== id);
+    newOrder.push(id);
+    reorderLayers(newOrder);
+  }, [selectedIds, layerOrder, reorderLayers]);
+
+  const sendToBack = useCallback(() => {
+    if (selectedIds.length !== 1) return;
+    const id = selectedIds[0];
+    const newOrder = layerOrder.filter((lid) => lid !== id);
+    newOrder.unshift(id);
+    reorderLayers(newOrder);
+  }, [selectedIds, layerOrder, reorderLayers]);
+
+  // Toggle lock/visibility helpers
+  const toggleLock = useCallback(() => {
+    selectedIds.forEach((id) => {
+      const shape = shapes.find((s) => s.id === id);
+      if (shape) {
+        updateShape(id, { locked: !shape.locked });
+      }
+    });
+  }, [selectedIds, shapes, updateShape]);
+
+  const toggleVisibility = useCallback(() => {
+    selectedIds.forEach((id) => {
+      const shape = shapes.find((s) => s.id === id);
+      if (shape) {
+        updateShape(id, { visible: !shape.visible });
+      }
+    });
+  }, [selectedIds, shapes, updateShape]);
+
+  // Get selected shape state for context menu
+  const selectedShape = selectedIds.length === 1 ? shapes.find((s) => s.id === selectedIds[0]) : null;
+  const isSelectedLocked = selectedShape?.locked ?? false;
+  const isSelectedVisible = selectedShape?.visible ?? true;
+
+  // Context menu handler
+  const handleContextMenu = useCallback((e: KonvaEventObject<PointerEvent>) => {
+    e.evt.preventDefault();
+
+    // Get click position in screen coordinates
+    const x = e.evt.clientX;
+    const y = e.evt.clientY;
+
+    setContextMenu({ x, y });
+  }, []);
+
+  const closeContextMenu = useCallback(() => {
+    setContextMenu(null);
+  }, []);
+
+  // Zoom functions
+  const zoomIn = useCallback(() => {
+    setStageScale((prev) => Math.min(MAX_SCALE, prev + ZOOM_STEP));
+  }, []);
+
+  const zoomOut = useCallback(() => {
+    setStageScale((prev) => Math.max(MIN_SCALE, prev - ZOOM_STEP));
+  }, []);
+
+  const zoomReset = useCallback(() => {
+    setStageScale(1);
+    setStagePos({ x: 0, y: 0 });
+  }, []);
+
+  const fitToContent = useCallback(() => {
+    if (shapes.length === 0) {
+      zoomReset();
+      return;
+    }
+
+    // Calculate bounding box of all shapes
+    let minX = Infinity, minY = Infinity;
+    let maxX = -Infinity, maxY = -Infinity;
+
+    shapes.forEach((shape) => {
+      const x = shape.x;
+      const y = shape.y;
+      const width = ('width' in shape ? (shape as RectangleShape).width : 0) || 100;
+      const height = ('height' in shape ? (shape as RectangleShape).height : 0) || 100;
+
+      minX = Math.min(minX, x);
+      minY = Math.min(minY, y);
+      maxX = Math.max(maxX, x + width);
+      maxY = Math.max(maxY, y + height);
+    });
+
+    // Add padding
+    const padding = 50;
+    minX -= padding;
+    minY -= padding;
+    maxX += padding;
+    maxY += padding;
+
+    const contentWidth = maxX - minX;
+    const contentHeight = maxY - minY;
+
+    // Calculate scale to fit content
+    const scaleX = dimensions.width / contentWidth;
+    const scaleY = dimensions.height / contentHeight;
+    const newScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, Math.min(scaleX, scaleY)));
+
+    // Calculate position to center content
+    const centerX = (minX + maxX) / 2;
+    const centerY = (minY + maxY) / 2;
+    const newPosX = dimensions.width / 2 - centerX * newScale;
+    const newPosY = dimensions.height / 2 - centerY * newScale;
+
+    setStageScale(newScale);
+    setStagePos({ x: newPosX, y: newPosY });
+  }, [shapes, dimensions, zoomReset]);
 
   // Notify parent of remote states changes (for PresencePanel)
   useEffect(() => {
@@ -87,9 +249,9 @@ export function CollabCanvas({ user, onRemoteStatesChange }: Props) {
 
   // Update transformer when selection changes
   useEffect(() => {
-    if (!transformerRef.current || !stageRef.current) return;
+    if (!transformerRef.current || !actualStageRef.current) return;
 
-    const stage = stageRef.current;
+    const stage = actualStageRef.current;
     const selectedNodes = selectedIds
       .map((id) => stage.findOne(`#${id}`))
       .filter(Boolean) as Konva.Node[];
@@ -113,17 +275,90 @@ export function CollabCanvas({ user, onRemoteStatesChange }: Props) {
         redo();
       }
 
-      // Delete
+      // Copy
+      if (isMod && e.key === 'c') {
+        e.preventDefault();
+        copy();
+      }
+
+      // Cut
+      if (isMod && e.key === 'x') {
+        e.preventDefault();
+        cut();
+      }
+
+      // Paste
+      if (isMod && e.key === 'v') {
+        e.preventDefault();
+        paste();
+      }
+
+      // Duplicate
+      if (isMod && e.key === 'd') {
+        e.preventDefault();
+        duplicate();
+      }
+
+      // Bring to front
+      if (isMod && e.key === ']' && !e.shiftKey) {
+        e.preventDefault();
+        bringToFront();
+      }
+
+      // Send to back
+      if (isMod && e.key === '[' && !e.shiftKey) {
+        e.preventDefault();
+        sendToBack();
+      }
+
+      // Zoom in (Ctrl/Cmd + Plus or =)
+      if (isMod && (e.key === '+' || e.key === '=')) {
+        e.preventDefault();
+        zoomIn();
+      }
+
+      // Zoom out (Ctrl/Cmd + Minus)
+      if (isMod && e.key === '-') {
+        e.preventDefault();
+        zoomOut();
+      }
+
+      // Reset zoom (Ctrl/Cmd + 0)
+      if (isMod && e.key === '0') {
+        e.preventDefault();
+        zoomReset();
+      }
+
+      // Fit to content (Ctrl/Cmd + 1)
+      if (isMod && e.key === '1') {
+        e.preventDefault();
+        fitToContent();
+      }
+
+      // Delete (skip locked shapes)
       if ((e.key === 'Delete' || e.key === 'Backspace') && selectedIds.length > 0) {
         e.preventDefault();
-        deleteShapes(selectedIds);
+        const deletableIds = selectedIds.filter((id) => {
+          const shape = shapes.find((s) => s.id === id);
+          return shape && !shape.locked;
+        });
+        if (deletableIds.length > 0) {
+          deleteShapes(deletableIds);
+        }
         setSelectedIds([]);
+      }
+
+      // Lock/Unlock selected shapes (Ctrl/Cmd + Shift + L)
+      if (isMod && e.shiftKey && e.key.toLowerCase() === 'l') {
+        e.preventDefault();
+        toggleLock();
       }
 
       // Escape
       if (e.key === 'Escape') {
         setSelectedIds([]);
         setTool('select');
+        closeContextMenu();
       }
 
       // Tool shortcuts
@@ -136,20 +371,24 @@ export function CollabCanvas({ user, onRemoteStatesChange }: Props) {
           case 'a': setTool('arrow'); break;
           case 't': setTool('text'); break;
           case 'p': setTool('freehand'); break;
+          case 'g':
+            e.preventDefault();
+            toggleSnap();
+            break;
         }
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedIds, undo, redo, deleteShapes, setTool, setSelectedIds]);
+  }, [selectedIds, shapes, undo, redo, deleteShapes, setTool, setSelectedIds, copy, cut, paste, duplicate, bringToFront, sendToBack, closeContextMenu, zoomIn, zoomOut, zoomReset, fitToContent, toggleSnap, toggleLock]);
 
   // Zoom with scroll wheel
   const handleWheel = useCallback(
     (e: KonvaEventObject<WheelEvent>) => {
       e.evt.preventDefault();
 
-      const stage = stageRef.current;
+      const stage = actualStageRef.current;
       if (!stage) return;
 
       const oldScale = stageScale;
@@ -158,7 +397,7 @@ export function CollabCanvas({ user, onRemoteStatesChange }: Props) {
 
       const scaleBy = 1.1;
       const newScale = e.evt.deltaY > 0 ? oldScale / scaleBy : oldScale * scaleBy;
-      const clampedScale = Math.max(0.1, Math.min(5, newScale));
+      const clampedScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, newScale));
 
       const mousePointTo = {
         x: (pointer.x - stagePos.x) / oldScale,
@@ -179,7 +418,7 @@ export function CollabCanvas({ user, onRemoteStatesChange }: Props) {
   // Track mouse for cursor sharing
   const handleMouseMove = useCallback(
     (_e: KonvaEventObject<MouseEvent>) => {
-      const stage = stageRef.current;
+      const stage = actualStageRef.current;
       if (!stage) return;
 
       const pos = stage.getRelativePointerPosition();
@@ -271,7 +510,7 @@ export function CollabCanvas({ user, onRemoteStatesChange }: Props) {
     (e: KonvaEventObject<MouseEvent>) => {
       if (e.evt.button !== 0) return;
 
-      const stage = stageRef.current;
+      const stage = actualStageRef.current;
       if (!stage) return;
 
       const pos = stage.getRelativePointerPosition();
@@ -387,6 +626,11 @@ export function CollabCanvas({ user, onRemoteStatesChange }: Props) {
     }
 
     if (shouldAdd) {
+      // Apply snap to position if enabled
+      if (snapEnabled && previewShape.x !== undefined && previewShape.y !== undefined) {
+        previewShape.x = snapToGrid(previewShape.x, gridSize);
+        previewShape.y = snapToGrid(previewShape.y, gridSize);
+      }
       addShape(previewShape as Shape);
       setTool('select');
     }
@@ -394,7 +638,7 @@ export function CollabCanvas({ user, onRemoteStatesChange }: Props) {
     setPreviewShape(null);
     setDrawStart(null);
     setCurrentPoints([]);
-  }, [isDrawing, previewShape, addShape, setTool]);
+  }, [isDrawing, previewShape, addShape, setTool, snapEnabled, gridSize]);
 
   const handleShapeClick = useCallback(
     (id: string, e: KonvaEventObject<MouseEvent | TouchEvent>) => {
@@ -430,6 +674,56 @@ export function CollabCanvas({ user, onRemoteStatesChange }: Props) {
     };
   }, [stagePos, stageScale, dimensions]);
 
+  // Calculate selection bounding box for alignment toolbar position
+  const selectionBounds = useMemo(() => {
+    if (selectedIds.length < 2) return null;
+
+    const selectedShapes = shapes.filter((s) => selectedIds.includes(s.id));
+    if (selectedShapes.length < 2) return null;
+
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+
+    selectedShapes.forEach((shape) => {
+      let width = 100;
+      let height = 100;
+
+      if ('width' in shape && typeof shape.width === 'number') {
+        width = shape.width;
+      }
+      if ('height' in shape && typeof shape.height === 'number') {
+        height = shape.height;
+      }
+      if ('radiusX' in shape && typeof shape.radiusX === 'number') {
+        width = shape.radiusX * 2;
+      }
+      if ('radiusY' in shape && typeof shape.radiusY === 'number') {
+        height = shape.radiusY * 2;
+      }
+      if ('outerRadius' in shape && typeof shape.outerRadius === 'number') {
+        width = shape.outerRadius * 2;
+        height = shape.outerRadius * 2;
+      }
+      if ('radius' in shape && typeof shape.radius === 'number') {
+        width = shape.radius * 2;
+        height = shape.radius * 2;
+      }
+
+      minX = Math.min(minX, shape.x);
+      minY = Math.min(minY, shape.y);
+      maxX = Math.max(maxX, shape.x + width);
+      maxY = Math.max(maxY, shape.y + height);
+    });
+
+    // Convert to screen coordinates
+    const screenX = (minX + maxX) / 2 * stageScale + stagePos.x;
+    const screenY = minY * stageScale + stagePos.y;
+
+    return { x: screenX, y: screenY };
+  }, [shapes, selectedIds, stageScale, stagePos]);
+
   // Get sorted and virtualized shapes (only render visible ones)
   const sortedShapes = useMemo(() => {
     return layerOrder
@@ -457,7 +751,7 @@ export function CollabCanvas({ user, onRemoteStatesChange }: Props) {
   return (
     <div ref={containerRef} className="w-full h-full bg-canvas overflow-hidden">
       <Stage
-        ref={stageRef}
+        ref={actualStageRef}
         width={dimensions.width}
         height={dimensions.height}
         x={stagePos.x}
@@ -469,7 +763,19 @@ export function CollabCanvas({ user, onRemoteStatesChange }: Props) {
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseLeave}
+        onContextMenu={handleContextMenu}
       >
+        {/* Grid Layer */}
+        <Layer listening={false}>
+          <Grid
+            width={dimensions.width}
+            height={dimensions.height}
+            stageX={stagePos.x}
+            stageY={stagePos.y}
+            scale={stageScale}
+          />
+        </Layer>
+
         {/* Shapes Layer */}
         <Layer>
           {sortedShapes.map((shape) => (
@@ -480,6 +786,8 @@ export function CollabCanvas({ user, onRemoteStatesChange }: Props) {
               onSelect={(e) => handleShapeClick(shape.id, e)}
               onChange={(updates) => updateShape(shape.id, updates)}
               draggable={!shape.locked && activeTool === 'select'}
+              snapEnabled={snapEnabled}
+              gridSize={gridSize}
             />
           ))}
 
@@ -511,10 +819,95 @@ export function CollabCanvas({ user, onRemoteStatesChange }: Props) {
         <CursorLayer remoteStates={remoteStates} />
       </Stage>
 
-      {/* Zoom indicator */}
-      <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-surface border border-border rounded-md px-3 py-1.5 text-sm text-text-secondary">
-        {Math.round(stageScale * 100)}%
-      </div>
+      {/* Alignment Toolbar - shows when 2+ shapes selected */}
+      {selectionBounds && (
+        <AlignmentToolbar
+          position={selectionBounds}
+          onAlignLeft={alignLeft}
+          onAlignCenterH={alignCenterH}
+          onAlignRight={alignRight}
+          onAlignTop={alignTop}
+          onAlignCenterV={alignCenterV}
+          onAlignBottom={alignBottom}
+          onDistributeH={distributeH}
+          onDistributeV={distributeV}
+          canAlign={canAlign}
+          canDistribute={canDistribute}
+        />
+      )}
+
+      {/* Lock indicators for selected locked shapes */}
+      {selectedIds.map((id) => {
+        const shape = shapes.find((s) => s.id === id);
+        if (!shape || !shape.locked) return null;
+
+        // Calculate screen position
+        const screenX = shape.x * stageScale + stagePos.x;
+        const screenY = shape.y * stageScale + stagePos.y;
+
+        return (
+          <div
+            key={`lock-${id}`}
+            className="absolute z-30 pointer-events-none"
+            style={{
+              left: screenX - 12,
+              top: screenY - 12,
+            }}
+          >
+            <div className="bg-warning text-white rounded-full p-1 shadow-md">
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="12"
+                height="12"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <rect width="18" height="11" x="3" y="11" rx="2" ry="2" />
+                <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+              </svg>
+            </div>
+          </div>
+        );
+      })}
+
+      {/* Zoom Controls */}
+      <ZoomControls
+        scale={stageScale}
+        onZoomIn={zoomIn}
+        onZoomOut={zoomOut}
+        onZoomReset={zoomReset}
+        onFitToContent={fitToContent}
+        minScale={MIN_SCALE}
+        maxScale={MAX_SCALE}
+      />
+
+      {/* Context Menu */}
+      <ContextMenu
+        x={contextMenu?.x ?? 0}
+        y={contextMenu?.y ?? 0}
+        isOpen={contextMenu !== null}
+        onClose={closeContextMenu}
+        onCopy={copy}
+        onCut={cut}
+        onPaste={paste}
+        onDuplicate={duplicate}
+        onDelete={() => {
+          deleteShapes(selectedIds);
+          setSelectedIds([]);
+        }}
+        onBringToFront={bringToFront}
+        onSendToBack={sendToBack}
+        onToggleLock={toggleLock}
+        onToggleVisibility={toggleVisibility}
+        hasSelection={hasSelection}
+        hasClipboard={hasClipboardContent}
+        isLocked={isSelectedLocked}
+        isVisible={isSelectedVisible}
+      />
     </div>
   );
 }

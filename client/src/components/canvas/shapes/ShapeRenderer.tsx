@@ -16,6 +16,13 @@ interface Props {
   onChange: (updates: Partial<Shape>) => void;
   onTextEdit?: () => void;
   draggable: boolean;
+  snapEnabled?: boolean;
+  gridSize?: number;
+}
+
+// Snap utility function
+function snapToGrid(value: number, gridSize: number): number {
+  return Math.round(value / gridSize) * gridSize;
 }
 
 export function ShapeRenderer({
@@ -25,11 +32,31 @@ export function ShapeRenderer({
   onChange,
   onTextEdit,
   draggable,
+  snapEnabled = false,
+  gridSize = 20,
 }: Props) {
+  // Wrap onChange to apply snap if enabled
+  const handleChange = (updates: Partial<Shape>) => {
+    if (snapEnabled && gridSize > 0) {
+      const snappedUpdates = { ...updates };
+      if ('x' in snappedUpdates && typeof snappedUpdates.x === 'number') {
+        snappedUpdates.x = snapToGrid(snappedUpdates.x, gridSize);
+      }
+      if ('y' in snappedUpdates && typeof snappedUpdates.y === 'number') {
+        snappedUpdates.y = snapToGrid(snappedUpdates.y, gridSize);
+      }
+      onChange(snappedUpdates);
+    } else {
+      onChange(updates);
+    }
+  };
+
   const commonProps = {
     isSelected,
     onSelect,
     draggable,
+    snapEnabled,
+    gridSize,
   };
 
   switch (shape.type) {
@@ -38,7 +65,7 @@ export function ShapeRenderer({
         <Rectangle
           {...shape}
           {...commonProps}
-          onChange={onChange}
+          onChange={handleChange}
         />
       );
     case 'ellipse':
@@ -46,7 +73,7 @@ export function ShapeRenderer({
         <Ellipse
           {...shape}
           {...commonProps}
-          onChange={onChange}
+          onChange={handleChange}
         />
       );
     case 'line':
@@ -54,7 +81,7 @@ export function ShapeRenderer({
         <Line
           {...shape}
           {...commonProps}
-          onChange={onChange}
+          onChange={handleChange}
         />
       );
     case 'arrow':
@@ -62,7 +89,7 @@ export function ShapeRenderer({
         <Arrow
           {...shape}
           {...commonProps}
-          onChange={onChange}
+          onChange={handleChange}
         />
       );
     case 'text':
@@ -70,7 +97,7 @@ export function ShapeRenderer({
         <Text
           {...shape}
           {...commonProps}
-          onChange={onChange}
+          onChange={handleChange}
           onDoubleClick={onTextEdit || (() => {})}
         />
       );
@@ -79,7 +106,7 @@ export function ShapeRenderer({
         <Freehand
           {...shape}
           {...commonProps}
-          onChange={onChange}
+          onChange={handleChange}
         />
       );
     case 'star':
@@ -87,7 +114,7 @@ export function ShapeRenderer({
         <Star
           {...shape}
           {...commonProps}
-          onChange={onChange}
+          onChange={handleChange}
         />
       );
     case 'polygon':
@@ -95,7 +122,7 @@ export function ShapeRenderer({
         <Polygon
           {...shape}
           {...commonProps}
-          onChange={onChange}
+          onChange={handleChange}
         />
       );
     default:
