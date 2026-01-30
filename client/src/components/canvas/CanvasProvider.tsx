@@ -15,19 +15,35 @@ import { useAuthStore } from '@/stores/authStore';
 
 /**
  * WebSocket URL Configuration
- * 
+ *
  * IMPORTANT: The URL must point to the backend's WebSocket endpoint.
- * 
- * Format: ws://host:port/ws
- * 
+ *
  * The y-websocket library will append the room name automatically:
  * ws://host:port/ws/{boardId}?token=xxx
- * 
- * Examples:
- * - Local dev: ws://localhost:8000/ws
- * - Production: wss://api.collabcanvas.com/ws
+ *
+ * Dynamic protocol detection ensures wss:// is used for https:// pages.
  */
-const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:8000/ws';
+function getWsUrl(): string {
+  // If explicitly set, use as-is
+  if (import.meta.env.VITE_WS_URL) {
+    return import.meta.env.VITE_WS_URL;
+  }
+
+  // Derive from API URL or current location
+  const apiUrl = import.meta.env.VITE_API_URL;
+  if (apiUrl) {
+    // Convert http(s)://host:port to ws(s)://host:port/ws
+    const url = new URL(apiUrl);
+    const protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+    return `${protocol}//${url.host}/ws`;
+  }
+
+  // Fallback: use current page location
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return `${protocol}//${window.location.host}/ws`;
+}
+
+const WS_URL = getWsUrl();
 
 interface CanvasContextType {
   ydoc: Y.Doc;

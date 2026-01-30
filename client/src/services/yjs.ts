@@ -2,8 +2,26 @@ import * as Y from 'yjs';
 import { WebsocketProvider } from 'y-websocket';
 import type { Shape } from '@/types/shapes';
 
-// CRITICAL FIX: Use port 8000 (backend) with /ws path prefix
-const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:8000/ws';
+/**
+ * Dynamic WebSocket URL - uses wss:// for https:// pages
+ */
+function getWsUrl(): string {
+  if (import.meta.env.VITE_WS_URL) {
+    return import.meta.env.VITE_WS_URL;
+  }
+
+  const apiUrl = import.meta.env.VITE_API_URL;
+  if (apiUrl) {
+    const url = new URL(apiUrl);
+    const protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+    return `${protocol}//${url.host}/ws`;
+  }
+
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return `${protocol}//${window.location.host}/ws`;
+}
+
+const WS_URL = getWsUrl();
 
 export interface CollabSession {
   ydoc: Y.Doc;
