@@ -2,8 +2,11 @@ from fastapi import APIRouter, Depends, HTTPException, status, Response
 from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.exc import OperationalError
 from pydantic import BaseModel
 import random
+import asyncio
+import logging
 
 from config import settings
 from database import get_db
@@ -18,6 +21,8 @@ from services.auth import (
     get_github_auth_url,
     get_github_user,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -50,6 +55,32 @@ class RefreshRequest(BaseModel):
     refresh_token: str
 
 
+async def execute_with_retry(db: AsyncSession, query, max_retries: int = 3):
+    """Execute a database query with retry logic for cold starts."""
+    last_error = None
+    for attempt in range(max_retries):
+        try:
+            result = await db.execute(query)
+            return result
+        except OperationalError as e:
+            last_error = e
+            logger.warning(f"Database connection attempt {attempt + 1} failed: {e}")
+            if attempt < max_retries - 1:
+                # Wait with exponential backoff
+                await asyncio.sleep(2 ** attempt)
+                # Try to rollback any failed transaction
+                try:
+                    await db.rollback()
+                except Exception:
+                    pass
+            else:
+                raise
+        except Exception as e:
+            # For other errors, don't retry
+            raise
+    raise last_error
+
+
 # Google OAuth
 @router.get("/google")
 async def google_login(redirect: bool = False):
@@ -69,40 +100,51 @@ async def google_callback(code: str, db: AsyncSession = Depends(get_db)):
     try:
         google_user = await get_google_user(code, redirect_uri)
     except Exception as e:
+        logger.error(f"Google OAuth failed: {e}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Failed to authenticate with Google: {str(e)}",
         )
 
-    # Find user by provider_id first, then by email
-    result = await db.execute(
-        select(User).where(
-            User.provider == "google",
-            User.provider_id == str(google_user["id"]),
-        )
-    )
-    user = result.scalar_one_or_none()
-
-    if not user:
-        # Check if user exists with same email (might have signed up with different provider)
-        result = await db.execute(
-            select(User).where(User.email == google_user["email"])
+    try:
+        # Find user by provider_id first, then by email
+        result = await execute_with_retry(
+            db,
+            select(User).where(
+                User.provider == "google",
+                User.provider_id == str(google_user["id"]),
+            )
         )
         user = result.scalar_one_or_none()
 
-    if not user:
-        # Create new user
-        user = User(
-            email=google_user["email"],
-            name=google_user.get("name", google_user["email"].split("@")[0]),
-            avatar_url=google_user.get("picture"),
-            provider="google",
-            provider_id=str(google_user["id"]),
-            cursor_color=random.choice(CURSOR_COLORS),
+        if not user:
+            # Check if user exists with same email (might have signed up with different provider)
+            result = await execute_with_retry(
+                db,
+                select(User).where(User.email == google_user["email"])
+            )
+            user = result.scalar_one_or_none()
+
+        if not user:
+            # Create new user
+            user = User(
+                email=google_user["email"],
+                name=google_user.get("name", google_user["email"].split("@")[0]),
+                avatar_url=google_user.get("picture"),
+                provider="google",
+                provider_id=str(google_user["id"]),
+                cursor_color=random.choice(CURSOR_COLORS),
+            )
+            db.add(user)
+            await db.commit()
+            await db.refresh(user)
+
+    except OperationalError as e:
+        logger.error(f"Database error during Google OAuth: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable. Please try again.",
         )
-        db.add(user)
-        await db.commit()
-        await db.refresh(user)
 
     # Create tokens
     access_token = create_access_token(str(user.id))
@@ -127,13 +169,14 @@ async def github_login(redirect: bool = False):
 
 
 @router.get("/github/callback")
-async def github_callback(code: str, db: AsyncSession = Depends(get_db)):
+async def github_callback(code: str, state: str = None, db: AsyncSession = Depends(get_db)):
     """Handle GitHub OAuth callback."""
     redirect_uri = f"{settings.backend_url}/api/auth/github/callback"
 
     try:
         github_user = await get_github_user(code, redirect_uri)
     except Exception as e:
+        logger.error(f"GitHub OAuth failed: {e}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Failed to authenticate with GitHub: {str(e)}",
@@ -145,35 +188,45 @@ async def github_callback(code: str, db: AsyncSession = Depends(get_db)):
             detail="Could not get email from GitHub. Please make sure your email is public or grant email access.",
         )
 
-    # Find user by provider_id first, then by email
-    result = await db.execute(
-        select(User).where(
-            User.provider == "github",
-            User.provider_id == str(github_user["id"]),
-        )
-    )
-    user = result.scalar_one_or_none()
-
-    if not user:
-        # Check if user exists with same email (might have signed up with different provider)
-        result = await db.execute(
-            select(User).where(User.email == github_user["email"])
+    try:
+        # Find user by provider_id first, then by email
+        result = await execute_with_retry(
+            db,
+            select(User).where(
+                User.provider == "github",
+                User.provider_id == str(github_user["id"]),
+            )
         )
         user = result.scalar_one_or_none()
 
-    if not user:
-        # Create new user
-        user = User(
-            email=github_user["email"],
-            name=github_user.get("name") or github_user.get("login", "User"),
-            avatar_url=github_user.get("avatar_url"),
-            provider="github",
-            provider_id=str(github_user["id"]),
-            cursor_color=random.choice(CURSOR_COLORS),
+        if not user:
+            # Check if user exists with same email (might have signed up with different provider)
+            result = await execute_with_retry(
+                db,
+                select(User).where(User.email == github_user["email"])
+            )
+            user = result.scalar_one_or_none()
+
+        if not user:
+            # Create new user
+            user = User(
+                email=github_user["email"],
+                name=github_user.get("name") or github_user.get("login", "User"),
+                avatar_url=github_user.get("avatar_url"),
+                provider="github",
+                provider_id=str(github_user["id"]),
+                cursor_color=random.choice(CURSOR_COLORS),
+            )
+            db.add(user)
+            await db.commit()
+            await db.refresh(user)
+
+    except OperationalError as e:
+        logger.error(f"Database error during GitHub OAuth: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable. Please try again.",
         )
-        db.add(user)
-        await db.commit()
-        await db.refresh(user)
 
     # Create tokens
     access_token = create_access_token(str(user.id))
@@ -209,9 +262,16 @@ async def refresh_tokens(request: RefreshRequest, db: AsyncSession = Depends(get
             detail="Invalid or expired refresh token",
         )
 
-    # Verify user still exists
-    result = await db.execute(select(User).where(User.id == user_id))
-    user = result.scalar_one_or_none()
+    try:
+        # Verify user still exists
+        result = await execute_with_retry(db, select(User).where(User.id == user_id))
+        user = result.scalar_one_or_none()
+    except OperationalError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable. Please try again.",
+        )
+
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
