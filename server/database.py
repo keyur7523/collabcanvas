@@ -1,36 +1,32 @@
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker, declarative_base
+from sqlalchemy.pool import NullPool
 import ssl
 
 from config import settings
 
-# Supabase requires SSL connections
-# Create SSL context that doesn't verify certificates (Supabase uses self-signed)
-ssl_context = ssl.create_default_context()
-ssl_context.check_hostname = False
-ssl_context.verify_mode = ssl.CERT_NONE
 
-# Configure engine for Supabase PostgreSQL
-# Key settings for Supabase:
-# 1. SSL is required
-# 2. Use connection pooler URL (port 6543) for serverless, or direct (port 5432)
-# 3. Longer timeouts for cold starts
+def get_connect_args():
+    """Get connection arguments for asyncpg with Supabase."""
+    # Create SSL context for Supabase
+    ssl_context = ssl.create_default_context()
+    ssl_context.check_hostname = False
+    ssl_context.verify_mode = ssl.CERT_NONE
+    
+    return {
+        "ssl": ssl_context,
+        "timeout": 60,  # Connection timeout (default is 10s, too short for cold starts)
+        "command_timeout": 60,  # Query timeout
+    }
+
+
+# For Supabase + serverless (Render), use NullPool to avoid connection pooling issues
+# Each request gets a fresh connection - more reliable for cold starts
 engine = create_async_engine(
     settings.database_url,
     echo=False,  # Set to True for SQL debugging
-    pool_pre_ping=True,  # Test connections before using them
-    pool_size=5,  # Small pool for serverless
-    max_overflow=10,
-    pool_timeout=30,  # Wait up to 30s for a connection from pool
-    pool_recycle=300,  # Recycle connections every 5 minutes
-    connect_args={
-        "ssl": ssl_context,
-        "timeout": 60,  # Connection timeout
-        "command_timeout": 60,  # Query timeout
-        "server_settings": {
-            "application_name": "collabcanvas",
-        },
-    },
+    poolclass=NullPool,  # No connection pooling - better for serverless
+    connect_args=get_connect_args(),
 )
 
 AsyncSessionLocal = sessionmaker(
