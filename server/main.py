@@ -35,6 +35,7 @@ app.add_middleware(
         "http://localhost:5173",
         "http://localhost:3000",
         "https://collabcanvas.vercel.app",
+        "https://collabcanvas-tau.vercel.app",
     ],
     allow_credentials=True,
     allow_methods=["*"],
