@@ -19,14 +19,11 @@ async def lifespan(app: FastAPI):
     """Application lifespan handler for startup/shutdown."""
     logger.info("Starting CollabCanvas API...")
     
-    # CRITICAL FIX: Use explicit start/stop instead of context manager
-    # This ensures proper initialization of the WebSocket server
-    await websocket_server.start()
-    logger.info("Yjs WebSocket server started")
+    # Use WebsocketServer as async context manager
+    async with websocket_server:
+        logger.info("Yjs WebSocket server started")
+        yield
     
-    yield
-    
-    await websocket_server.stop()
     logger.info("CollabCanvas API shut down")
 
 

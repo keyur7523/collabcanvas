@@ -16,13 +16,20 @@ export function OnlineUsers() {
     const updateUsers = () => {
       const states = awareness.getStates();
       const onlineUsers: OnlineUser[] = [];
-
+      const seenIds = new Set<string>();
+    
       states.forEach((state, clientId) => {
         // Skip if no user info or if it's the local client
         if (!state?.user || clientId === awareness.clientID) return;
-        onlineUsers.push(state.user as OnlineUser);
+        
+        // Skip duplicates
+        const user = state.user as OnlineUser;
+        if (seenIds.has(user.id)) return;
+        seenIds.add(user.id);
+        
+        onlineUsers.push(user);
       });
-
+    
       setUsers(onlineUsers);
     };
 
