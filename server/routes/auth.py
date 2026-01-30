@@ -74,7 +74,7 @@ async def google_callback(code: str, db: AsyncSession = Depends(get_db)):
             detail=f"Failed to authenticate with Google: {str(e)}",
         )
 
-    # Find or create user
+    # Find user by provider_id first, then by email
     result = await db.execute(
         select(User).where(
             User.provider == "google",
@@ -82,6 +82,13 @@ async def google_callback(code: str, db: AsyncSession = Depends(get_db)):
         )
     )
     user = result.scalar_one_or_none()
+
+    if not user:
+        # Check if user exists with same email (might have signed up with different provider)
+        result = await db.execute(
+            select(User).where(User.email == google_user["email"])
+        )
+        user = result.scalar_one_or_none()
 
     if not user:
         # Create new user
@@ -138,7 +145,7 @@ async def github_callback(code: str, db: AsyncSession = Depends(get_db)):
             detail="Could not get email from GitHub. Please make sure your email is public or grant email access.",
         )
 
-    # Find or create user
+    # Find user by provider_id first, then by email
     result = await db.execute(
         select(User).where(
             User.provider == "github",
@@ -146,6 +153,13 @@ async def github_callback(code: str, db: AsyncSession = Depends(get_db)):
         )
     )
     user = result.scalar_one_or_none()
+
+    if not user:
+        # Check if user exists with same email (might have signed up with different provider)
+        result = await db.execute(
+            select(User).where(User.email == github_user["email"])
+        )
+        user = result.scalar_one_or_none()
 
     if not user:
         # Create new user
