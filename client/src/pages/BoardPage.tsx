@@ -1,180 +1,265 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { toast } from 'sonner';
+import {
+  Settings,
+  Share2,
+  Layers,
+  MessageSquare,
+  SlidersHorizontal,
+  Users,
+  Wifi,
+  WifiOff,
+  Loader2,
+} from 'lucide-react';
+import { Button } from '@/components/ui/Button';
+import { ThemeToggle } from '@/components/ui/ThemeToggle';
 import { CanvasProvider, useCanvasContext } from '@/components/canvas/CanvasProvider';
 import { CollabCanvas } from '@/components/canvas/CollabCanvas';
 import { Toolbar } from '@/components/toolbar/Toolbar';
-import { PropertiesPanel, LayersPanel, CommentsPanel } from '@/components/panels';
-import { ConnectionStatus } from '@/components/ui/ConnectionStatus';
-import { OnlineUsers } from '@/components/ui/OnlineUsers';
+import { PropertiesPanel } from '@/components/panels/PropertiesPanel';
+import { LayersPanel } from '@/components/panels/LayersPanel';
+import { CommentsPanel } from '@/components/panels/CommentsPanel';
+import { PresencePanel } from '@/components/collaboration/PresencePanel';
 import { ShareModal } from '@/components/sharing/ShareModal';
-import { KeyboardShortcutsModal } from '@/components/ui/KeyboardShortcutsModal';
-import { CommandPalette } from '@/components/ui/CommandPalette';
-import { Layers, Settings, ChevronLeft, ChevronRight, LogOut, Home, Share2, MessageSquare } from 'lucide-react';
-import { cn } from '@/lib/utils';
+import { OnlineUsers } from '@/components/ui/OnlineUsers';
 import { useAuthStore } from '@/stores/authStore';
-import { ThemeToggle } from '@/components/ui/ThemeToggle';
-import { useYjsUndoRedo } from '@/hooks/useYjsUndoRedo';
-import type { UserInfo } from '@/hooks/useAwareness';
+import { getBoard, type Board } from '@/api/boards';
+import { cn } from '@/lib/utils';
+import type { UserInfo, RemoteState } from '@/hooks/useAwareness';
 
-type PanelTab = 'properties' | 'layers' | 'comments';
+type PanelTab = 'properties' | 'layers' | 'comments' | 'team';
 
-// Get user info for awareness from auth store
-function useCurrentUser(): UserInfo {
-  const { user } = useAuthStore();
-  if (!user) {
-    throw new Error('User must be authenticated');
-  }
-  return {
-    id: user.id,
-    name: user.name,
-    color: user.cursor_color,
-  };
+// Generate a random color for the user
+function generateUserColor(): string {
+  const colors = [
+    '#ef4444', '#f97316', '#f59e0b', '#84cc16', '#22c55e',
+    '#14b8a6', '#06b6d4', '#0ea5e9', '#3b82f6', '#6366f1',
+    '#8b5cf6', '#a855f7', '#d946ef', '#ec4899', '#f43f5e',
+  ];
+  return colors[Math.floor(Math.random() * colors.length)];
 }
 
-function BoardContent({ user }: { user: UserInfo }) {
+export function BoardPage() {
   const { boardId } = useParams<{ boardId: string }>();
   const navigate = useNavigate();
-  const { isConnected, isSynced } = useCanvasContext();
-  const { user: authUser, logout } = useAuthStore();
-  const { undo, redo } = useYjsUndoRedo();
-  const [isPanelOpen, setIsPanelOpen] = useState(true);
-  const [activeTab, setActiveTab] = useState<PanelTab>('properties');
-  const [showUserMenu, setShowUserMenu] = useState(false);
-  const [showShareModal, setShowShareModal] = useState(false);
-  const [showShortcuts, setShowShortcuts] = useState(false);
-  const [showCommandPalette, setShowCommandPalette] = useState(false);
+  const { user, accessToken } = useAuthStore();
+  const [board, setBoard] = useState<Board | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  // Global keyboard shortcuts for modals
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // Cmd/Ctrl+K for command palette
-      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
-        e.preventDefault();
-        setShowCommandPalette(true);
-      }
-      // ? for keyboard shortcuts
-      if (e.key === '?' && !e.metaKey && !e.ctrlKey) {
-        e.preventDefault();
-        setShowShortcuts(true);
+    if (!boardId) {
+      navigate('/dashboard');
+      return;
+    }
+
+    if (!accessToken) {
+      navigate('/login');
+      return;
+    }
+
+    const fetchBoard = async () => {
+      try {
+        const data = await getBoard(boardId);
+        setBoard(data);
+      } catch (err) {
+        console.error('Failed to fetch board:', err);
+        setError('Board not found or access denied');
+        toast.error('Failed to load board');
+      } finally {
+        setIsLoading(false);
       }
     };
 
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
+    fetchBoard();
+  }, [boardId, accessToken, navigate]);
 
-  const handleLogout = () => {
-    logout();
-    navigate('/login');
+  if (isLoading) {
+    return (
+      <div className="h-screen w-screen flex items-center justify-center bg-canvas">
+        <div className="flex flex-col items-center gap-3">
+          <Loader2 size={32} className="animate-spin text-accent" />
+          <p className="text-text-secondary">Loading board...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (error || !board) {
+    return (
+      <div className="h-screen w-screen flex items-center justify-center bg-canvas">
+        <div className="text-center">
+          <p className="text-lg text-text mb-4">{error || 'Board not found'}</p>
+          <Button onClick={() => navigate('/dashboard')}>Back to Dashboard</Button>
+        </div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return null;
+  }
+
+  const userInfo: UserInfo = {
+    id: user.id,
+    name: user.name,
+    color: generateUserColor(),
+    avatar: user.avatar_url ?? undefined,
   };
 
-  const handleOpenShortcuts = useCallback(() => {
-    setShowCommandPalette(false);
-    setShowShortcuts(true);
+  return (
+    <CanvasProvider boardId={boardId!}>
+      <BoardContent board={board} user={userInfo} />
+    </CanvasProvider>
+  );
+}
+
+interface BoardContentProps {
+  board: Board;
+  user: UserInfo;
+}
+
+function BoardContent({ board, user }: BoardContentProps) {
+  const navigate = useNavigate();
+  // Use isConnected and isSynced from context (not connectionStatus)
+  const { isConnected, isSynced, connectionError } = useCanvasContext();
+  const [activeTab, setActiveTab] = useState<PanelTab>('properties');
+  const [isShareOpen, setIsShareOpen] = useState(false);
+  const [isPanelCollapsed, setIsPanelCollapsed] = useState(false);
+  
+  // Presence state
+  const [remoteStates, setRemoteStates] = useState<Map<number, RemoteState>>(new Map());
+  const [followingUserId, setFollowingUserId] = useState<string | null>(null);
+
+  // Callback to receive remote states from CollabCanvas
+  const handleRemoteStatesChange = useCallback((states: Map<number, RemoteState>) => {
+    setRemoteStates(new Map(states));
   }, []);
+
+  // Handle following a user
+  const handleFollowUser = useCallback((userId: string | null) => {
+    setFollowingUserId(userId);
+    if (userId) {
+      toast.info(`Following user - viewport sync coming soon!`);
+    }
+  }, []);
+
+  // Derive connection status from isConnected and isSynced
+  const getStatusIcon = () => {
+    if (connectionError) {
+      return <WifiOff size={14} className="text-error" />;
+    }
+    if (!isConnected) {
+      return <Loader2 size={14} className="animate-spin text-warning" />;
+    }
+    if (!isSynced) {
+      return <Loader2 size={14} className="animate-spin text-warning" />;
+    }
+    return <Wifi size={14} className="text-success" />;
+  };
+
+  const getStatusText = () => {
+    if (connectionError) {
+      return 'Disconnected';
+    }
+    if (!isConnected) {
+      return 'Connecting...';
+    }
+    if (!isSynced) {
+      return 'Syncing...';
+    }
+    return 'Connected';
+  };
 
   return (
     <div className="h-screen w-screen overflow-hidden bg-canvas flex flex-col">
       {/* Header */}
-      <header className="h-14 bg-surface border-b border-border flex items-center justify-between px-4 shrink-0 z-20">
+      <header className="h-12 bg-surface border-b border-border flex items-center justify-between px-4 shrink-0">
         <div className="flex items-center gap-4">
           <button
-            onClick={() => navigate('/')}
-            className="p-1.5 hover:bg-surface-hover rounded-md text-text-secondary hover:text-text transition-colors"
-            title="Back to Dashboard"
+            onClick={() => navigate('/dashboard')}
+            className="text-lg font-semibold text-text hover:text-accent transition-colors"
           >
-            <Home size={20} />
+            CollabCanvas
           </button>
-          <h1 className="text-lg font-semibold text-text">CollabCanvas</h1>
-          <span className="text-sm text-text-secondary">
-            Board: {boardId?.slice(0, 8)}...
-          </span>
-          <ConnectionStatus isConnected={isConnected} isSynced={isSynced} />
+          <span className="text-text-muted">/</span>
+          <span className="text-text font-medium truncate max-w-xs">{board.name}</span>
+          
+          {/* Connection status */}
+          <div className="flex items-center gap-1.5 text-xs text-text-secondary">
+            {getStatusIcon()}
+            <span>{getStatusText()}</span>
+          </div>
         </div>
 
-        {/* Online users */}
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-3">
           <OnlineUsers />
-        </div>
-
-        <div className="flex items-center gap-3 relative">
-          {/* Theme toggle */}
-          <ThemeToggle />
-
-          {/* Share button */}
-          <button
-            onClick={() => setShowShareModal(true)}
-            className="flex items-center gap-2 px-3 py-1.5 bg-accent text-white rounded-lg hover:bg-accent/90 transition-colors text-sm font-medium"
+          
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => setIsShareOpen(true)}
+            className="gap-1.5"
           >
-            <Share2 size={16} />
+            <Share2 size={14} />
             Share
-          </button>
+          </Button>
 
-          {/* User menu */}
-          <button
-            onClick={() => setShowUserMenu(!showUserMenu)}
-            className="flex items-center gap-2 hover:bg-surface-hover rounded-lg px-2 py-1 transition-colors"
-          >
-            {authUser?.avatar_url ? (
-              <img
-                src={authUser.avatar_url}
-                alt={user.name}
-                className="w-7 h-7 rounded-full"
-              />
-            ) : (
-              <div
-                className="w-7 h-7 rounded-full flex items-center justify-center text-white text-xs font-medium"
-                style={{ backgroundColor: user.color }}
-              >
-                {user.name[0]}
-              </div>
-            )}
-            <span className="text-sm text-text-secondary">{user.name}</span>
-          </button>
-
-          {/* Dropdown menu */}
-          {showUserMenu && (
-            <>
-              <div
-                className="fixed inset-0 z-10"
-                onClick={() => setShowUserMenu(false)}
-              />
-              <div className="absolute right-0 top-full mt-1 bg-surface border border-border rounded-lg shadow-lg py-1 z-20 min-w-40">
-                <div className="px-3 py-2 border-b border-border">
-                  <p className="text-sm font-medium text-text">{user.name}</p>
-                  <p className="text-xs text-text-muted">{authUser?.email}</p>
-                </div>
-                <button
-                  onClick={handleLogout}
-                  className="w-full flex items-center gap-2 px-3 py-2 text-sm text-text-secondary hover:bg-surface-hover hover:text-text"
-                >
-                  <LogOut size={14} />
-                  Sign out
-                </button>
-              </div>
-            </>
-          )}
+          <ThemeToggle />
+          
+          <Button variant="ghost" size="sm">
+            <Settings size={16} />
+          </Button>
         </div>
       </header>
 
       {/* Main content */}
       <div className="flex-1 flex overflow-hidden relative">
-        {/* Canvas */}
+        {/* Canvas area */}
         <main className="flex-1 relative">
-          <CollabCanvas user={user} />
-
-          {/* Toolbar */}
+          <CollabCanvas 
+            user={user} 
+            onRemoteStatesChange={handleRemoteStatesChange}
+          />
           <Toolbar />
+          
+          {/* Following banner */}
+          {followingUserId && (
+            <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20">
+              <div className="bg-accent text-white px-4 py-2 rounded-full text-sm font-medium shadow-lg flex items-center gap-2">
+                <Users size={14} />
+                Following user
+                <button
+                  onClick={() => setFollowingUserId(null)}
+                  className="ml-2 hover:bg-white/20 rounded px-2 py-0.5"
+                >
+                  Stop
+                </button>
+              </div>
+            </div>
+          )}
         </main>
 
-        {/* Right Panel */}
+        {/* Right panel */}
         <aside
           className={cn(
-            'bg-surface border-l border-border transition-all duration-200 flex flex-col shrink-0',
-            isPanelOpen ? 'w-72' : 'w-0'
+            'bg-surface border-l border-border flex flex-col transition-all duration-200',
+            isPanelCollapsed ? 'w-12' : 'w-72'
           )}
         >
-          {isPanelOpen && (
+          {isPanelCollapsed ? (
+            <div className="flex flex-col items-center py-2 gap-1">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setIsPanelCollapsed(false)}
+                className="w-8 h-8 p-0"
+              >
+                <SlidersHorizontal size={16} />
+              </Button>
+            </div>
+          ) : (
             <>
               {/* Panel tabs */}
               <div className="flex border-b border-border">
@@ -187,8 +272,7 @@ function BoardContent({ user }: { user: UserInfo }) {
                       : 'text-text-secondary hover:text-text'
                   )}
                 >
-                  <Settings size={14} />
-                  Props
+                  <SlidersHorizontal size={14} />
                 </button>
                 <button
                   onClick={() => setActiveTab('layers')}
@@ -200,7 +284,6 @@ function BoardContent({ user }: { user: UserInfo }) {
                   )}
                 >
                   <Layers size={14} />
-                  Layers
                 </button>
                 <button
                   onClick={() => setActiveTab('comments')}
@@ -212,69 +295,53 @@ function BoardContent({ user }: { user: UserInfo }) {
                   )}
                 >
                   <MessageSquare size={14} />
-                  Chat
+                </button>
+                <button
+                  onClick={() => setActiveTab('team')}
+                  className={cn(
+                    'flex-1 py-3 text-sm font-medium flex items-center justify-center gap-1 transition-colors',
+                    activeTab === 'team'
+                      ? 'text-text border-b-2 border-accent'
+                      : 'text-text-secondary hover:text-text'
+                  )}
+                >
+                  <Users size={14} />
+                </button>
+                <button
+                  onClick={() => setIsPanelCollapsed(true)}
+                  className="px-2 text-text-muted hover:text-text"
+                >
+                  ×
                 </button>
               </div>
 
               {/* Panel content */}
-              <div className="flex-1 overflow-hidden">
+              <div className="flex-1 overflow-auto">
                 {activeTab === 'properties' && <PropertiesPanel />}
                 {activeTab === 'layers' && <LayersPanel />}
                 {activeTab === 'comments' && <CommentsPanel />}
+                {activeTab === 'team' && (
+                  <div className="p-3">
+                    <PresencePanel
+                      remoteStates={remoteStates}
+                      currentUserId={user.id}
+                      onFollowUser={handleFollowUser}
+                      followingUserId={followingUserId}
+                    />
+                  </div>
+                )}
               </div>
             </>
           )}
         </aside>
-
-        {/* Panel toggle */}
-        <button
-          onClick={() => setIsPanelOpen(!isPanelOpen)}
-          className="absolute right-0 top-1/2 -translate-y-1/2 translate-x-0 bg-surface border border-border rounded-l-md p-1.5 text-text-secondary hover:text-text z-10"
-          style={{ right: isPanelOpen ? '288px' : '0' }}
-        >
-          {isPanelOpen ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
-        </button>
       </div>
 
       {/* Share Modal */}
-      {boardId && (
-        <ShareModal
-          boardId={boardId}
-          isOpen={showShareModal}
-          onClose={() => setShowShareModal(false)}
-          isOwner={true} // TODO: Check actual ownership
-        />
-      )}
-
-      {/* Keyboard Shortcuts Modal */}
-      <KeyboardShortcutsModal
-        isOpen={showShortcuts}
-        onClose={() => setShowShortcuts(false)}
-      />
-
-      {/* Command Palette */}
-      <CommandPalette
-        isOpen={showCommandPalette}
-        onClose={() => setShowCommandPalette(false)}
-        onOpenShortcuts={handleOpenShortcuts}
-        onUndo={undo}
-        onRedo={redo}
+      <ShareModal
+        isOpen={isShareOpen}
+        onClose={() => setIsShareOpen(false)}
+        boardId={board.id}
       />
     </div>
-  );
-}
-
-export function BoardPage() {
-  const { boardId } = useParams<{ boardId: string }>();
-  const user = useCurrentUser();
-
-  if (!boardId) {
-    return <div className="p-8 text-text">Board not found</div>;
-  }
-
-  return (
-    <CanvasProvider boardId={boardId}>
-      <BoardContent user={user} />
-    </CanvasProvider>
   );
 }

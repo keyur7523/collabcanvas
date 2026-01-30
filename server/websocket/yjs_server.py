@@ -18,33 +18,48 @@ router = APIRouter()
 
 class WebsocketAdapter:
     """Adapts FastAPI WebSocket to pycrdt-websocket interface."""
-    
+
     def __init__(self, websocket: WebSocket, path: str):
         self._websocket = websocket
         self._path = path
-    
+        self._closed = False
+
     @property
     def path(self) -> str:
         return self._path
-    
+
     async def recv(self) -> bytes:
         """Receive a message."""
         return await self._websocket.receive_bytes()
-    
+
     async def send(self, message: bytes) -> None:
         """Send a message."""
-        if self._websocket.client_state == WebSocketState.CONNECTED:
+        if not self._closed and self._websocket.client_state == WebSocketState.CONNECTED:
             await self._websocket.send_bytes(message)
-    
-    async def __aiter__(self):
-        """Iterate over incoming messages."""
+
+    async def close(self) -> None:
+        """Close the connection."""
+        self._closed = True
+        if self._websocket.client_state == WebSocketState.CONNECTED:
+            await self._websocket.close()
+
+    def __aiter__(self):
+        """Return async iterator."""
+        return self
+
+    async def __anext__(self) -> bytes:
+        """Get next message from WebSocket."""
         try:
-            while self._websocket.client_state == WebSocketState.CONNECTED:
-                yield await self.recv()
+            if self._closed or self._websocket.client_state != WebSocketState.CONNECTED:
+                raise StopAsyncIteration
+            data = await self._websocket.receive_bytes()
+            return data
         except WebSocketDisconnect:
-            pass
+            self._closed = True
+            raise StopAsyncIteration
         except Exception:
-            pass
+            self._closed = True
+            raise StopAsyncIteration
 
 
 @router.websocket("/ws/{room_name}")

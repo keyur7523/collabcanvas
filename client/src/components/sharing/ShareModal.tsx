@@ -1,32 +1,30 @@
 import { useState, useEffect, useCallback } from 'react';
+import { X, Copy, Check, UserPlus, Trash2, Crown, Link2, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
-import { Copy, Check, UserMinus, Crown, Pencil, Eye } from 'lucide-react';
-import { Modal } from '@/components/ui/Modal';
 import { Button } from '@/components/ui/Button';
-import { useAuthStore } from '@/stores/authStore';
 import {
-  createInvite,
   listMembers,
-  updateMemberRole,
-  removeMember,
+  createInvite,
+  updateMemberRoleOnBoard,
+  removeMemberFromBoard,
   type BoardMember,
+  type MemberRole,
+  type BoardInvite,
 } from '@/api/sharing';
 
-interface Props {
-  boardId: string;
+interface ShareModalProps {
   isOpen: boolean;
   onClose: () => void;
-  isOwner: boolean;
+  boardId: string;
 }
 
-export function ShareModal({ boardId, isOpen, onClose, isOwner }: Props) {
-  const { user } = useAuthStore();
+export function ShareModal({ isOpen, onClose, boardId }: ShareModalProps) {
   const [members, setMembers] = useState<BoardMember[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [inviteLink, setInviteLink] = useState<string | null>(null);
-  const [inviteRole, setInviteRole] = useState<'editor' | 'viewer'>('editor');
+  const [inviteRole, setInviteRole] = useState<MemberRole>('editor');
   const [isCreatingInvite, setIsCreatingInvite] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const [currentInvite, setCurrentInvite] = useState<BoardInvite | null>(null);
+  const [copiedLink, setCopiedLink] = useState(false);
 
   const fetchMembers = useCallback(async () => {
     try {
@@ -34,6 +32,7 @@ export function ShareModal({ boardId, isOpen, onClose, isOwner }: Props) {
       setMembers(data);
     } catch (error) {
       console.error('Failed to fetch members:', error);
+      toast.error('Failed to load members');
     } finally {
       setIsLoading(false);
     }
@@ -41,37 +40,45 @@ export function ShareModal({ boardId, isOpen, onClose, isOwner }: Props) {
 
   useEffect(() => {
     if (isOpen) {
+      setIsLoading(true);
+      setCurrentInvite(null);
       fetchMembers();
-      setInviteLink(null);
-      setCopied(false);
     }
   }, [isOpen, fetchMembers]);
 
   const handleCreateInvite = async () => {
     setIsCreatingInvite(true);
     try {
-      const invite = await createInvite(boardId, { role: inviteRole });
-      setInviteLink(invite.invite_url);
-    } catch (error) {
+      const invite = await createInvite(boardId, {
+        role: inviteRole,
+        expires_in_days: 7,
+      });
+      setCurrentInvite(invite);
+      toast.success('Invite link created');
+    } catch (error: any) {
       console.error('Failed to create invite:', error);
-      toast.error('Failed to create invite link');
+      const message = error?.message || 'Failed to create invite';
+      toast.error(message);
     } finally {
       setIsCreatingInvite(false);
     }
   };
 
-  const handleCopyLink = () => {
-    if (inviteLink) {
-      navigator.clipboard.writeText(inviteLink);
-      setCopied(true);
-      toast.success('Link copied to clipboard');
-      setTimeout(() => setCopied(false), 2000);
+  const handleCopyInviteLink = async () => {
+    if (!currentInvite) return;
+    try {
+      await navigator.clipboard.writeText(currentInvite.invite_url);
+      setCopiedLink(true);
+      toast.success('Invite link copied to clipboard');
+      setTimeout(() => setCopiedLink(false), 2000);
+    } catch (error) {
+      toast.error('Failed to copy link');
     }
   };
 
-  const handleRoleChange = async (userId: string, newRole: string) => {
+  const handleRoleChange = async (userId: string, newRole: MemberRole) => {
     try {
-      await updateMemberRole(boardId, userId, newRole);
+      await updateMemberRoleOnBoard(boardId, userId, newRole);
       setMembers((prev) =>
         prev.map((m) => (m.user_id === userId ? { ...m, role: newRole } : m))
       );
@@ -82,142 +89,183 @@ export function ShareModal({ boardId, isOpen, onClose, isOwner }: Props) {
     }
   };
 
-  const handleRemoveMember = async (userId: string, name: string) => {
-    if (!confirm(`Remove ${name} from this board?`)) return;
+  const handleRemoveMember = async (userId: string, memberName: string) => {
+    if (!confirm(`Remove ${memberName} from this board?`)) return;
+
     try {
-      await removeMember(boardId, userId);
+      await removeMemberFromBoard(boardId, userId);
       setMembers((prev) => prev.filter((m) => m.user_id !== userId));
-      toast.success('Member removed');
+      toast.success(`Removed ${memberName}`);
     } catch (error) {
       console.error('Failed to remove member:', error);
       toast.error('Failed to remove member');
     }
   };
 
-  return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Share Board" size="md">
-      <div className="space-y-6">
-        {/* Invite link section (owner only) */}
-        {isOwner && (
-          <div className="space-y-3">
-            <h4 className="text-sm font-medium text-text">Invite People</h4>
+  if (!isOpen) return null;
 
-            {!inviteLink ? (
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center">
+      {/* Backdrop */}
+      <div
+        className="absolute inset-0 bg-black/50"
+        onClick={onClose}
+      />
+
+      {/* Modal */}
+      <div className="relative bg-surface border border-border rounded-lg shadow-xl w-full max-w-md mx-4 max-h-[90vh] overflow-hidden flex flex-col">
+        {/* Header */}
+        <div className="flex items-center justify-between p-4 border-b border-border">
+          <div>
+            <h2 className="text-lg font-semibold text-text">Share Board</h2>
+            <p className="text-sm text-text-muted">Invite people to collaborate</p>
+          </div>
+          <button
+            onClick={onClose}
+            className="text-text-muted hover:text-text p-1 rounded"
+          >
+            <X size={20} />
+          </button>
+        </div>
+
+        {/* Content */}
+        <div className="flex-1 overflow-auto p-4 space-y-6">
+          {/* Create invite link section */}
+          <div>
+            <label className="text-sm font-medium text-text block mb-2">
+              Create invite link
+            </label>
+            <div className="flex gap-2 mb-3">
+              <select
+                value={inviteRole}
+                onChange={(e) => setInviteRole(e.target.value as MemberRole)}
+                className="px-3 py-2 text-sm bg-canvas border border-border rounded-md text-text focus:outline-none focus:ring-2 focus:ring-accent"
+              >
+                <option value="viewer">Can view</option>
+                <option value="editor">Can edit</option>
+              </select>
+              <Button
+                size="sm"
+                onClick={handleCreateInvite}
+                disabled={isCreatingInvite}
+                className="gap-1.5"
+              >
+                {isCreatingInvite ? (
+                  <RefreshCw size={14} className="animate-spin" />
+                ) : (
+                  <UserPlus size={14} />
+                )}
+                Generate Link
+              </Button>
+            </div>
+
+            {/* Show generated invite link */}
+            {currentInvite && (
               <div className="flex gap-2">
-                <select
-                  value={inviteRole}
-                  onChange={(e) => setInviteRole(e.target.value as 'editor' | 'viewer')}
-                  className="px-3 py-2 text-sm bg-canvas border border-border rounded-md text-text focus:outline-none focus:ring-2 focus:ring-accent"
+                <div className="flex-1 flex items-center gap-2 px-3 py-2 bg-canvas border border-border rounded-md text-sm text-text-secondary overflow-hidden">
+                  <Link2 size={14} className="shrink-0 text-accent" />
+                  <span className="truncate">{currentInvite.invite_url}</span>
+                </div>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={handleCopyInviteLink}
+                  className="shrink-0"
                 >
-                  <option value="editor">Can edit</option>
-                  <option value="viewer">Can view</option>
-                </select>
-                <Button onClick={handleCreateInvite} disabled={isCreatingInvite}>
-                  {isCreatingInvite ? 'Creating...' : 'Create Link'}
-                </Button>
-              </div>
-            ) : (
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  value={inviteLink}
-                  readOnly
-                  className="flex-1 px-3 py-2 text-sm bg-canvas border border-border rounded-md text-text-secondary"
-                />
-                <Button onClick={handleCopyLink} variant={copied ? 'ghost' : 'primary'}>
-                  {copied ? <Check size={16} /> : <Copy size={16} />}
+                  {copiedLink ? <Check size={14} /> : <Copy size={14} />}
                 </Button>
               </div>
             )}
+            <p className="text-xs text-text-muted mt-2">
+              Share this link with people you want to invite. Link expires in 7 days.
+            </p>
           </div>
-        )}
 
-        {/* Members list */}
-        <div className="space-y-3">
-          <h4 className="text-sm font-medium text-text">
-            Members ({members.length})
-          </h4>
+          {/* Members list */}
+          <div>
+            <label className="text-sm font-medium text-text block mb-2">
+              People with access ({members.length})
+            </label>
+            
+            {isLoading ? (
+              <div className="text-sm text-text-muted text-center py-4">
+                Loading members...
+              </div>
+            ) : (
+              <div className="space-y-2 max-h-48 overflow-auto">
+                {members.map((member) => (
+                  <div
+                    key={member.user_id}
+                    className="flex items-center gap-3 p-2 rounded-md hover:bg-surface-hover"
+                  >
+                    {/* Avatar */}
+                    {member.avatar_url ? (
+                      <img
+                        src={member.avatar_url}
+                        alt={member.name}
+                        className="w-8 h-8 rounded-full"
+                      />
+                    ) : (
+                      <div className="w-8 h-8 rounded-full bg-accent/20 flex items-center justify-center text-sm font-medium text-accent">
+                        {member.name[0]}
+                      </div>
+                    )}
 
-          {isLoading ? (
-            <div className="text-sm text-text-secondary">Loading...</div>
-          ) : (
-            <div className="space-y-2 max-h-64 overflow-auto">
-              {members.map((member) => (
-                <div
-                  key={member.user_id}
-                  className="flex items-center gap-3 p-2 rounded-lg hover:bg-surface-hover"
-                >
-                  {member.avatar_url ? (
-                    <img
-                      src={member.avatar_url}
-                      alt={member.name}
-                      className="w-8 h-8 rounded-full"
-                    />
-                  ) : (
-                    <div className="w-8 h-8 rounded-full bg-accent/20 flex items-center justify-center text-sm font-medium text-accent">
-                      {member.name[0]}
-                    </div>
-                  )}
-
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium text-text truncate">
-                        {member.name}
-                        {member.user_id === user?.id && (
-                          <span className="text-text-muted"> (you)</span>
+                    {/* Info */}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-sm font-medium text-text truncate">
+                          {member.name}
+                        </span>
+                        {member.role === 'owner' && (
+                          <Crown size={12} className="text-warning shrink-0" />
                         )}
+                      </div>
+                      <span className="text-xs text-text-muted truncate block">
+                        {member.email}
                       </span>
-                      {member.role === 'owner' && (
-                        <Crown size={12} className="text-warning shrink-0" />
-                      )}
                     </div>
-                    <p className="text-xs text-text-muted truncate">
-                      {member.email}
-                    </p>
-                  </div>
 
-                  {/* Role indicator/selector */}
-                  {member.role === 'owner' ? (
-                    <span className="text-xs text-text-muted px-2 py-1 bg-surface rounded">
-                      Owner
-                    </span>
-                  ) : isOwner ? (
-                    <div className="flex items-center gap-1">
-                      <select
-                        value={member.role}
-                        onChange={(e) => handleRoleChange(member.user_id, e.target.value)}
-                        className="text-xs px-2 py-1 bg-surface border border-border rounded text-text focus:outline-none"
-                      >
-                        <option value="editor">Editor</option>
-                        <option value="viewer">Viewer</option>
-                      </select>
-                      <button
-                        onClick={() => handleRemoveMember(member.user_id, member.name)}
-                        className="p-1 text-text-muted hover:text-error rounded"
-                        title="Remove member"
-                      >
-                        <UserMinus size={14} />
-                      </button>
-                    </div>
-                  ) : (
-                    <span className="text-xs text-text-muted px-2 py-1 bg-surface rounded flex items-center gap-1">
-                      {member.role === 'editor' ? (
-                        <>
-                          <Pencil size={10} /> Editor
-                        </>
-                      ) : (
-                        <>
-                          <Eye size={10} /> Viewer
-                        </>
-                      )}
-                    </span>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
+                    {/* Role selector / Actions */}
+                    {member.role === 'owner' ? (
+                      <span className="text-xs text-text-muted px-2 py-1 bg-surface-hover rounded">
+                        Owner
+                      </span>
+                    ) : (
+                      <div className="flex items-center gap-1">
+                        <select
+                          value={member.role}
+                          onChange={(e) =>
+                            handleRoleChange(member.user_id, e.target.value as MemberRole)
+                          }
+                          className="text-xs px-2 py-1 bg-canvas border border-border rounded text-text focus:outline-none"
+                        >
+                          <option value="viewer">Viewer</option>
+                          <option value="editor">Editor</option>
+                        </select>
+                        <button
+                          onClick={() => handleRemoveMember(member.user_id, member.name)}
+                          className="p-1 text-text-muted hover:text-error rounded"
+                          title="Remove member"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="p-4 border-t border-border flex justify-end">
+          <Button variant="secondary" onClick={onClose}>
+            Done
+          </Button>
         </div>
       </div>
-    </Modal>
+    </div>
   );
 }

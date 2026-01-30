@@ -7,15 +7,20 @@ interface Props {
 }
 
 export function CursorLayer({ remoteStates }: Props) {
-  const cursors = Array.from(remoteStates.values()).filter(
-    (state) => state.cursor !== null
-  );
+  // Convert Map entries to array, filtering for those with cursors
+  // Use the Map key (clientId) as a stable React key
+  const cursorsWithIds = Array.from(remoteStates.entries())
+    .filter(([, state]) => state.cursor !== null)
+    .map(([clientId, state]) => ({
+      clientId,
+      state,
+    }));
 
   return (
     <Layer listening={false} perfectDrawEnabled={false}>
-      {cursors.map((state, index) => (
+      {cursorsWithIds.map(({ clientId, state }) => (
         <RemoteCursor
-          key={index}
+          key={clientId}
           x={state.cursor!.x}
           y={state.cursor!.y}
           color={state.user.color}

@@ -22,7 +22,7 @@ export function OnlineUsers() {
         // Skip if no user info or if it's the local client
         if (!state?.user || clientId === awareness.clientID) return;
         
-        // Skip duplicates
+        // Skip duplicates (same user might have multiple connections)
         const user = state.user as OnlineUser;
         if (seenIds.has(user.id)) return;
         seenIds.add(user.id);
@@ -50,7 +50,7 @@ export function OnlineUsers() {
       <div className="flex -space-x-2">
         {users.slice(0, 5).map((user) => (
           <div
-            key={user.id}
+            key={user.id}  
             className="relative group"
           >
             {user.avatar ? (

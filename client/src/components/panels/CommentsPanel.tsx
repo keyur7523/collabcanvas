@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
 import { toast } from 'sonner';
-import { MessageSquare, Send, Check, Trash2, CornerDownRight } from 'lucide-react';
+import { MessageSquare, Send, Check, Trash2, CornerDownRight, AlertCircle } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { useAuthStore } from '@/stores/authStore';
 import { formatDistanceToNow } from '@/lib/utils';
@@ -15,25 +15,46 @@ import {
 
 export function CommentsPanel() {
   const { boardId } = useParams<{ boardId: string }>();
-  const { user } = useAuthStore();
+  const { user, accessToken } = useAuthStore();
   const [comments, setComments] = useState<Comment[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [newComment, setNewComment] = useState('');
   const [replyingTo, setReplyingTo] = useState<string | null>(null);
   const [replyText, setReplyText] = useState('');
 
   const fetchComments = useCallback(async () => {
-    if (!boardId) return;
+    // Guard: Don't fetch if no boardId or no auth token
+    if (!boardId) {
+      setError('No board selected');
+      setIsLoading(false);
+      return;
+    }
+    
+    if (!accessToken) {
+      setError('Please log in to view comments');
+      setIsLoading(false);
+      return;
+    }
+
+    setError(null);
     try {
       const data = await listComments(boardId);
       setComments(data);
-    } catch (error) {
-      console.error('Failed to fetch comments:', error);
+    } catch (err) {
+      console.error('Failed to fetch comments:', err);
+      const message = err instanceof Error ? err.message : 'Failed to load comments';
+      setError(message);
+      
+      // Don't show toast for auth errors - the error state handles it
+      if (!message.includes('401') && !message.includes('unauthorized')) {
+        toast.error('Failed to load comments');
+      }
     } finally {
       setIsLoading(false);
     }
-  }, [boardId]);
+  }, [boardId, accessToken]);
 
   useEffect(() => {
     fetchComments();
@@ -41,13 +62,20 @@ export function CommentsPanel() {
 
   const handleCreateComment = async () => {
     if (!boardId || !newComment.trim() || isSubmitting) return;
+    
+    if (!accessToken) {
+      toast.error('Please log in to comment');
+      return;
+    }
+    
     setIsSubmitting(true);
     try {
       const comment = await createComment(boardId, { content: newComment.trim() });
       setComments((prev) => [comment, ...prev]);
       setNewComment('');
-    } catch (error) {
-      console.error('Failed to create comment:', error);
+      setError(null); // Clear any previous errors on success
+    } catch (err) {
+      console.error('Failed to create comment:', err);
       toast.error('Failed to add comment');
     } finally {
       setIsSubmitting(false);
@@ -69,8 +97,8 @@ export function CommentsPanel() {
       );
       setReplyingTo(null);
       setReplyText('');
-    } catch (error) {
-      console.error('Failed to create reply:', error);
+    } catch (err) {
+      console.error('Failed to create reply:', err);
       toast.error('Failed to add reply');
     } finally {
       setIsSubmitting(false);
@@ -83,8 +111,8 @@ export function CommentsPanel() {
       setComments((prev) =>
         prev.map((c) => (c.id === comment.id ? { ...c, ...updated } : c))
       );
-    } catch (error) {
-      console.error('Failed to resolve comment:', error);
+    } catch (err) {
+      console.error('Failed to resolve comment:', err);
       toast.error('Failed to update comment');
     }
   };
@@ -104,11 +132,24 @@ export function CommentsPanel() {
         setComments((prev) => prev.filter((c) => c.id !== commentId));
       }
       toast.success('Comment deleted');
-    } catch (error) {
-      console.error('Failed to delete comment:', error);
+    } catch (err) {
+      console.error('Failed to delete comment:', err);
       toast.error('Failed to delete comment');
     }
   };
+
+  // Error state
+  if (error) {
+    return (
+      <div className="p-4 text-center">
+        <AlertCircle size={32} className="mx-auto text-error mb-2" />
+        <p className="text-sm text-error mb-2">{error}</p>
+        <Button size="sm" variant="ghost" onClick={fetchComments}>
+          Try again
+        </Button>
+      </div>
+    );
+  }
 
   if (isLoading) {
     return (
@@ -144,7 +185,7 @@ export function CommentsPanel() {
             <MessageSquare size={32} className="mx-auto text-text-muted mb-2" />
             <p className="text-sm text-text-secondary">No comments yet</p>
             <p className="text-xs text-text-muted mt-1">
-              Click on the canvas to add a comment
+              Be the first to add a comment
             </p>
           </div>
         ) : (

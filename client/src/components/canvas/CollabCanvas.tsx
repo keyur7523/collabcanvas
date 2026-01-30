@@ -10,6 +10,7 @@ import { useToolStore } from '@/stores/toolStore';
 import { useThrottle } from '@/hooks/useThrottle';
 import { ShapeRenderer } from './shapes/ShapeRenderer';
 import { CursorLayer } from './CursorLayer';
+import { RemoteSelections } from './RemoteSelections';
 import type {
   Shape,
   RectangleShape,
@@ -29,9 +30,10 @@ const VIEWPORT_BUFFER = 200;
 
 interface Props {
   user: UserInfo;
+  onRemoteStatesChange?: (states: Map<number, any>) => void;
 }
 
-export function CollabCanvas({ user }: Props) {
+export function CollabCanvas({ user, onRemoteStatesChange }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<Konva.Stage>(null);
   const transformerRef = useRef<Konva.Transformer>(null);
@@ -56,6 +58,11 @@ export function CollabCanvas({ user }: Props) {
 
   // Throttled cursor update for performance (50ms)
   const throttledUpdateCursor = useThrottle(updateCursor, 50);
+
+  // Notify parent of remote states changes (for PresencePanel)
+  useEffect(() => {
+    onRemoteStatesChange?.(remoteStates);
+  }, [remoteStates, onRemoteStatesChange]);
 
   // Sync selection to awareness
   useEffect(() => {
@@ -135,7 +142,7 @@ export function CollabCanvas({ user }: Props) {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedIds, undo, redo, deleteShapes, setTool]);
+  }, [selectedIds, undo, redo, deleteShapes, setTool, setSelectedIds]);
 
   // Zoom with scroll wheel
   const handleWheel = useCallback(
@@ -313,7 +320,7 @@ export function CollabCanvas({ user }: Props) {
         setPreviewShape(shape);
       }
     },
-    [activeTool, fillColor, strokeColor, strokeWidth, addShape, setTool]
+    [activeTool, fillColor, strokeColor, strokeWidth, addShape, setTool, setSelectedIds]
   );
 
   const handleMouseUp = useCallback(() => {
@@ -399,14 +406,14 @@ export function CollabCanvas({ user }: Props) {
       const isMultiSelect = evt.shiftKey || evt.metaKey;
 
       if (isMultiSelect) {
-        setSelectedIds((prev) =>
-          prev.includes(id) ? prev.filter((sid) => sid !== id) : [...prev, id]
+        setSelectedIds((prev: string[]) =>
+          prev.includes(id) ? prev.filter((sid: string) => sid !== id) : [...prev, id]
         );
       } else {
         setSelectedIds([id]);
       }
     },
-    [activeTool]
+    [activeTool, setSelectedIds]
   );
 
   // Calculate viewport bounds for virtualization
@@ -482,6 +489,11 @@ export function CollabCanvas({ user }: Props) {
           )}
         </Layer>
 
+        {/* Remote Selections Layer - shows what others are selecting */}
+        <Layer listening={false}>
+          <RemoteSelections remoteStates={remoteStates} shapes={shapes} />
+        </Layer>
+
         {/* Selection Layer */}
         <Layer>
           <Transformer
@@ -507,7 +519,7 @@ export function CollabCanvas({ user }: Props) {
   );
 }
 
-// Preview shape component for drawing
+// Preview shape component for drawing (unchanged)
 function PreviewShape({ shape }: { shape: Partial<Shape> }) {
   const commonProps = {
     opacity: 0.6,
